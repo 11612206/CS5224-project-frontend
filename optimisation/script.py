@@ -1,3 +1,5 @@
+import psycopg2
+import pandas.io.sql as sqlio
 import folium
 import pandas as pd
 import numpy as np
@@ -8,38 +10,41 @@ from datetime import datetime
 from python_tsp.exact import solve_tsp_dynamic_programming
 import geojson
 from geojson import Feature,FeatureCollection,MultiLineString
+from flask import Flask,request,render_template
 
-mydf=pd.read_excel('POI.xlsx')
-mydf.reset_index(drop=True, inplace=True)
-
-om_token='eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOjcyMjIsInVzZXJfaWQiOjcyMjIsImVtYWlsIjoiZTA1NTQwNTZAdS5udXMuZWR1IiwiZm9yZXZlciI6ZmFsc2UsImlzcyI6Imh0dHA6XC9cL29tMi5kZmUub25lbWFwLnNnXC9hcGlcL3YyXC91c2VyXC9zZXNzaW9uIiwiaWF0IjoxNjE2NjQ4NDczLCJleHAiOjE2MTcwODA0NzMsIm5iZiI6MTYxNjY0ODQ3MywianRpIjoiZGEwZDk4MzFlZjkzMjJlY2Y3MWJiNjVkMjEwNmRlMzgifQ.bg7QfPMXnKsM8xAyac3CMzGyLKOEomWijVEILMvSx40'
-routeType='pt'
-mode=['TRANSIT','BUS']
-head='https://developers.onemap.sg/privateapi/routingsvc/route?'
-dt=datetime.now().strftime("%Y-%m-%d")
-tm=datetime.now().strftime('%H:%M:%S')
-
-# this function: input: list of coordinate of each POI, return matrix
-comb = combinations(mydf['POI_name'], 2)  
-comb_list=list(comb)
-distance_matrix,iti_matrix=construct_matrix(comb_list)
-permutation,distance=shortest_path(distance_matrix)
-m=visualisation(permutation,iti_matrix)
+def db_init():
+    engine = psycopg2.connect(
+    database="demo_1",
+    user="postgres",
+    password="Huxjoffer2021!",
+    host="database-1-test.ctpfk8jpyqbl.us-east-1.rds.amazonaws.com",
+    port='5432')
+    postgreSQL_select_Query = "select * from poi"
+    df= sqlio.read_sql_query(postgreSQL_select_Query, engine)
+    df.drop(columns=['id'],inplace=True)
+    return df
 
 # for each place combination, query onemap
-def construct_matrix(combination_list):
+def construct_matrix(combination_list,mydf):
     distance_matrix=np.zeros((len(mydf),len(mydf)))
     iti_matrix=np.empty((len(mydf),len(mydf)),dtype='object')
 
     for i in combination_list:  
-        start=str(mydf.loc[(mydf['POI_name']==i[0]),['latitude']].values[0][0])+','+str(mydf.loc[(mydf['POI_name']==i[0]),['longitude']].values[0][0])
-        end=str(mydf.loc[(mydf['POI_name']==i[1]),['latitude']].values[0][0])+','+str(mydf.loc[(mydf['POI_name']==i[1]),['longitude']].values[0][0])
+        start=str(mydf.loc[(mydf['poi_name']==i[0]),['latitude']].values[0][0])+','+str(mydf.loc[(mydf['poi_name']==i[0]),['longitude']].values[0][0])
+        end=str(mydf.loc[(mydf['poi_name']==i[1]),['latitude']].values[0][0])+','+str(mydf.loc[(mydf['poi_name']==i[1]),['longitude']].values[0][0])
 
         duration_list=[]
         min_dur=1000000
         response_list=[]
         num_iti=[]
         selected_iti=None
+
+        om_token='eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOjcyMjIsInVzZXJfaWQiOjcyMjIsImVtYWlsIjoiZTA1NTQwNTZAdS5udXMuZWR1IiwiZm9yZXZlciI6ZmFsc2UsImlzcyI6Imh0dHA6XC9cL29tMi5kZmUub25lbWFwLnNnXC9hcGlcL3YyXC91c2VyXC9zZXNzaW9uIiwiaWF0IjoxNjE2OTEwMzExLCJleHAiOjE2MTczNDIzMTEsIm5iZiI6MTYxNjkxMDMxMSwianRpIjoiYmEzMTJmNzcxYzNlMGFmZTAwMWE4NTdjMTBiMGVkNGEifQ.aMGt3aRwZSUuPlPyMDqPSkpoPU2fBFVhTr3ngWa9Kdk'
+        routeType='pt'
+        mode=['TRANSIT','BUS']
+        head='https://developers.onemap.sg/privateapi/routingsvc/route?'
+        dt=datetime.now().strftime("%Y-%m-%d")
+        tm=datetime.now().strftime('%H:%M:%S')
 
         for j in mode: # each mode
             url=head+'start='+start+'&end='+end+'&routeType='+routeType+'&token='+om_token+'&date='+str(dt)+'&time='+str(tm)+'&mode='+j+'&numItineraries='+str(3)
@@ -61,8 +66,8 @@ def construct_matrix(combination_list):
             selected_iti=response_list[1]['plan']['itineraries'][best_dur_index-num_iti[0]]
 
         # min_dur write into matrix
-        x=mydf.loc[(mydf['POI_name']==i[0])].index.values[0]
-        y=mydf.loc[(mydf['POI_name']==i[1])].index.values[0]
+        x=mydf.loc[(mydf['poi_name']==i[0])].index.values[0]
+        y=mydf.loc[(mydf['poi_name']==i[1])].index.values[0]
         distance_matrix[x][y]=min_dur
         distance_matrix[y][x]=min_dur
         iti_matrix[x][y]=selected_iti
@@ -75,7 +80,7 @@ def shortest_path(distance_matrix):
     permutation, distance = solve_tsp_dynamic_programming(distance_matrix)
     return permutation,distance
 
-def visualisation(permutation,iti_matrix):
+def visualisation(permutation,iti_matrix,mydf):
     # draw folium graph
     str_fea_list=[]
     tooltip = 'Click For More Info'
@@ -139,5 +144,25 @@ def visualisation(permutation,iti_matrix):
     folium.GeoJson(ms, name='multistring').add_to(m)
 
     # Generate map
-    m.save('map.html')
+    render_m=m.get_root().render()
+    return render_m
+
+# initialise app
+app=Flask(__name__)
+
+@app.route("/optimisation",methods=['GET','POST'])
+def optimisation():
+    mydf=db_init()
+
+    # this function: input: list of coordinate of each POI, return matrix
+    comb = combinations(mydf['poi_name'], 2)  
+    comb_list=list(comb)
+    distance_matrix,iti_matrix=construct_matrix(comb_list,mydf)
+    permutation,distance=shortest_path(distance_matrix)
+    m=visualisation(permutation,iti_matrix,mydf)
     return m
+
+# entrance
+if __name__=='__main__':
+    app.run(host='0.0.0.0',port=8080)
+    #app.run(debug=True)
